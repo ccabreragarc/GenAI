@@ -1,10 +1,9 @@
 # --- Core Deep Learning & Imaging (FINAL FIX) ---
-torch==2.5.0                 # CHANGED: Compatible version for Py3.13
-torchvision==0.20.0          # CHANGED: Paired version for torch==2.5.0
+torch==2.5.0                 
+torchvision==0.21.0          # CHANGED to the lowest compatible version
 Pillow==10.3.0               
 numpy==2.3.4                 
 
-# ... (keep the rest of the list the same)
 # --- Data Loading, Handling, and Utilities ---
 datasets==4.4.1      
 pandas==2.3.3        
