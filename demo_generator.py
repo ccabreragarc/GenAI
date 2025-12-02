@@ -6,10 +6,10 @@ from PIL import Image
 import numpy as np
 
 # --- Configuration (ADJUST THESE TO MATCH YOUR PROJECT) ---
-MODELS_DIR = "models"
+MODELS_DIR = "models/demo"
 OUTPUTS_DIR = "outputs/generated"
 # Use the name of your actual model file here
-CHECKPOINT_FILENAME = "your_actual_checkpoint.pt" 
+CHECKPOINT_FILENAME = "demo_checkpoint.pt" 
 CHECKPOINT_PATH = os.path.join(MODELS_DIR, CHECKPOINT_FILENAME)
 NUM_SAMPLES = 8
 Z_DIM = 512 # Latent space dimension 
@@ -67,7 +67,9 @@ def create_demo_checkpoint():
     state = {
         'model_state_dict': model.state_dict(),
         'iteration': 1000,
-        'loss': 0.5
+        'loss': 0.5,
+        'model_type': 'demo',
+        'nz': Z_DIM,
     }
     
     # Only save the checkpoint if a real, trained one is not already present
@@ -80,6 +82,9 @@ def create_demo_checkpoint():
     # Load the state dictionary back into the model for use
     # ***IMPORTANT: You should use your actual model loading/unwrapping logic here***
     checkpoint = torch.load(CHECKPOINT_PATH, map_location=torch.device('cpu'))
+    if "model_type" not in checkpoint:
+        checkpoint["model_type"] = "dcgan"
+        torch.save(checkpoint, CHECKPOINT_PATH)
     model.load_state_dict(checkpoint['model_state_dict'])
     
     return model

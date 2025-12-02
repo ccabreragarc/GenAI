@@ -1,42 +1,18 @@
-# --- Core Deep Learning & Imaging (STABLE PYTHON 3.11 VERSIONS) ---
-torch>=2.5.0,<2.10.0                 
-torchvision>=0.15.0          
-Pillow==10.4.0               
-numpy==2.2.4                 
-datasets==4.4.1      
-pandas==2.3.3        # FINAL FIX: Reverting to 2.3.3 (the highest available version)
-scipy==1.13.1                
-tqdm==4.67.1         
-
-# --- Dashboard & Web Framework ---
-streamlit==1.36.0    # Kept at 1.36.0 to be compatible with numpy 2.x
-matplotlib==3.9.0            
-altair==5.3.0        
-
-# --- Other Essential Libraries ---
-packaging
-protobuf
-pyarrow
-pytz
-PyYAML
-typing_extensions==4.10.0
-
-# --- Extra Index URL ---
+# Extra index for CPU wheels
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-# PyTorch (choose a range that worked locally)
+# Core
 torch>=2.5.0,<2.10.0
 torchvision>=0.15.0
-
-# Imaging / numerical
-Pillow==10.4.0
 numpy==2.2.4
+Pillow==10.4.0
 
-# ML / data
+# Data / ML
 datasets==4.4.1
 pandas==2.3.3
 scipy==1.13.1
 tqdm==4.67.1
+pyarrow
 
 # App / viz
 streamlit==1.36.0
@@ -46,7 +22,6 @@ altair==5.3.0
 # Misc
 packaging
 protobuf
-pyarrow
 pytz
 PyYAML
 typing_extensions==4.10.0

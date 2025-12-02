@@ -32,7 +32,16 @@ import logging
 import sys
 import time
 
+from utils import get_device
+from train import Generator
+
 logging.getLogger(__name__).setLevel(logging.INFO)
+
+
+def _pick_device(force_cpu: bool = False, requested: str | None = None) -> torch.device:
+    if force_cpu:
+        return torch.device("cpu")
+    return get_device(requested)
 
 def _looks_like_state_dict(d: dict) -> bool:
     if not isinstance(d, dict) or len(d) == 0:
@@ -59,8 +68,21 @@ def _extract_state_dict(ckpt: dict):
     return None
 
 def load_model_from_checkpoint(checkpoint_path, device=None, nz=100):
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
     if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = get_device()
+
+    try:
+        ckpt = torch.load(checkpoint_path, map_location=device)
+    except Exception as e:
+        raise RuntimeError(f"Failed to read checkpoint {checkpoint_path}: {e}") from e
+    if not isinstance(ckpt, dict) or ckpt.get("model_type") != "dcgan":
+        raise RuntimeError(
+            f"Checkpoint {checkpoint_path} is not a DCGAN generator checkpoint (expected model_type='dcgan'). "
+            "Train a DCGAN with train.py --model dcgan first."
+        )
+    nz = int(ckpt.get("nz", nz))
 
     # create model instance
     G = Generator(nz=nz).to(device)
@@ -72,13 +94,7 @@ def load_model_from_checkpoint(checkpoint_path, device=None, nz=100):
     init_norm = _param_norm(G)
     logging.info("Init generator param L2-norm: %.6f", init_norm)
 
-    ckpt = torch.load(checkpoint_path, map_location=device)
-
-    state = None
-    if isinstance(ckpt, dict):
-        state = _extract_state_dict(ckpt)
-    else:
-        state = ckpt
+    state = _extract_state_dict(ckpt)
 
     if state is None:
         raise RuntimeError(f"No valid state_dict found in checkpoint: {checkpoint_path}. Top keys: {list(ckpt.keys()) if isinstance(ckpt, dict) else type(ckpt)}")
@@ -102,63 +118,9 @@ def load_model_from_checkpoint(checkpoint_path, device=None, nz=100):
     if only_model:
         logging.info("Example keys in model but not checkpoint (first 30): %s", only_model)
 
-    # try best-effort load strict=False first
-    try:
-        G.load_state_dict(norm_state, strict=False)
-        post_norm = _param_norm(G)
-        logging.info("Loaded checkpoint into Generator with strict=False. Post-load param L2-norm: %.6f (delta %.6f)", post_norm, post_norm - init_norm)
-        # compute average param diff for common keys
-        diffs = []
-        for k in common:
-            ckpt_v = norm_state[k].to(torch.float32).cpu()
-            model_v = g_state[k].to(torch.float32).cpu()
-            if ckpt_v.shape == model_v.shape:
-                diffs.append(float((model_v - ckpt_v).norm().item()))
-        if diffs:
-            logging.info("Average param key diff (common matching-shape keys): %.6f over %d keys", float(sum(diffs)/len(diffs)), len(diffs))
-        return G.eval()
-    except Exception as e:
-        logging.warning("load_state_dict(strict=False) failed or raised: %s", e)
-
-    # fallback: load only matching keys by name+shape
-    filtered = {}
-    mismatched = []
-    for k, v in norm_state.items():
-        if k in g_state and hasattr(v, "shape"):
-            if g_state[k].shape == v.shape:
-                filtered[k] = v
-            else:
-                mismatched.append((k, tuple(v.shape), tuple(g_state[k].shape)))
-
-    logging.info("Filtered compatible keys to load: %d. Mismatched shapes count: %d", len(filtered), len(mismatched))
-    if mismatched:
-        logging.info("Example mismatched keys (first 10): %s", mismatched[:10])
-
-    if not filtered:
-        raise RuntimeError(
-            "No compatible parameter keys found between checkpoint and model. "
-            "This usually means the checkpoint is for a different architecture or the Generator signature (module/class) differs. "
-            f"Checkpoint top keys (sample): {list(state.keys())[:40]}"
-        )
-
-    # merge and load
-    merged = {**g_state}
-    merged.update(filtered)
-    G.load_state_dict(merged)
+    G.load_state_dict(norm_state, strict=True)
     post_norm = _param_norm(G)
-    logging.info("Loaded matching subset of checkpoint keys into Generator. Post-load param L2-norm: %.6f (delta %.6f)", post_norm, post_norm - init_norm)
-
-    # list small-change keys (optional)
-    small_changes = []
-    for k in filtered.keys():
-        a = g_state[k].cpu().float()
-        b = filtered[k].cpu().float()
-        change = float((a - b).norm().item())
-        if change < 1e-6:
-            small_changes.append(k)
-    if len(small_changes) > 0:
-        logging.warning("Found %d keys with near-zero change after loading (may indicate identical values): first examples: %s", min(8, len(small_changes)), small_changes[:8])
-
+    logging.info("Loaded checkpoint into Generator with strict=True. Post-load param L2-norm: %.6f (delta %.6f)", post_norm, post_norm - init_norm)
     return G.eval()
 
 
@@ -406,19 +368,6 @@ def save_generated_images(imgs: torch.Tensor, out_dir: Path, prefix: str = "gen"
 
 
 # ensure Generator is available
-try:
-    # common places: train.py, models.py, model.py
-    from train import Generator
-except Exception:
-    try:
-        from models import Generator
-    except Exception:
-        try:
-            from model import Generator
-        except Exception as e:
-            raise ImportError(
-                "Generator class not found. Define it in this repo or export it from train.py / models.py / model.py"
-            ) from e
 
 # ---- CLI / Main -----------------------------------------------------------
 
@@ -457,6 +406,12 @@ def parse_args():
         action="store_true",
         help="Force CPU even if CUDA is available.",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="cpu or cuda",
+    )
     return parser.parse_args()
 
 
@@ -467,21 +422,26 @@ def main():
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    device = _pick_device(force_cpu=args.cpu)
+    if args.cpu:
+        device = torch.device("cpu")
+    else:
+        device = torch.device(args.device)
     print(f"[INFO] Using device: {device}")
 
     print(f"[INFO] Loading model from checkpoint: {checkpoint_path}")
-    model = load_model_from_checkpoint(checkpoint_path, device)
-    # load_model_from_checkpoint currently returns Generator instance; try to detect noise dim if stored
-    ckpt_noise_dim = None
+    try:
+        ckpt = torch.load(checkpoint_path, map_location=device)
+        ckpt_noise_dim = ckpt.get("nz")
+        model = load_model_from_checkpoint(checkpoint_path, device, nz=ckpt_noise_dim or 100)
+    except Exception as e:
+        print(f"[ERROR] Could not load checkpoint: {e}")
+        return
 
-    # Decide noise dimension: CLI > checkpoint > default 512
-    noise_dim = args.noise_dim or ckpt_noise_dim or 512
+    # Decide noise dimension: CLI > checkpoint > model nz
+    noise_dim = args.noise_dim or ckpt_noise_dim or 100
     if args.noise_dim and ckpt_noise_dim and args.noise_dim != ckpt_noise_dim:
         print(
-            f"[WARN] noise_dim={args.noise_dim} "
-            f"differs from checkpoint noise_dim={ckpt_noise_dim}. "
-            "Using CLI value."
+            f"[WARN] noise_dim={args.noise_dim} differs from checkpoint nz={ckpt_noise_dim}. Using CLI value."
         )
     print(f"[INFO] Noise dimension: {noise_dim}")
 
